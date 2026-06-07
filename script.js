@@ -9,8 +9,18 @@
 /* ================================================================
    CONSTANTS & STATE
    ================================================================ */
+const isAdmin = new URLSearchParams(location.search).has('admin');
+
+const HARDCODED_PHOTOS = [
+  // Add your Google Drive file IDs or full share links here!
+  // e.g. '1BxiMVs0X...', or 'https://drive.google.com/file/d/1BxiMVs0X.../view'
+  'https://drive.google.com/file/d/1XJeCzn_W9Tg4P4xp772vmUL2dOOXwFSA/view?usp=drive_link',
+  'https://drive.google.com/file/d/1ig4OJvlQRxo05aXvjIVpyUVPnvIhjb6k/view?usp=drive_link'
+];
+
+
 const STORAGE_PHOTOS = 'memoriesAlbum_photos_v2';
-const STORAGE_TITLE  = 'memoriesAlbum_title';
+const STORAGE_TITLE = 'memoriesAlbum_title';
 const STORAGE_APIKEY = 'memoriesAlbum_apikey';
 
 const BACK_QUOTES = [
@@ -22,204 +32,119 @@ const BACK_QUOTES = [
   'Home is where the heart is — and yours is in every photo here.',
 ];
 
-let photos       = [];    // { id, src, caption, source }
+let photos = [];    // { id, src, caption, source }
 let pendingBatch = [];    // photos staged in add-modal preview
-let currentLeaf  = 0;    // 0 = cover; increments each page-flip
-let totalLeaves  = 0;
-let isAnimating  = false;
-let captionId    = null;  // photo id being edited
+let currentLeaf = 0;    // 0 = cover; increments each page-flip
+let totalLeaves = 0;
+let isAnimating = false;
+let captionId = null;  // photo id being edited
 let fetchedDrive = [];    // photos from Drive folder fetch
 
 /* ================================================================
    DOM REFERENCES
    ================================================================ */
-const $  = id => document.getElementById(id);
-const book          = $('book');
-const prevBtn       = $('prevBtn');
-const nextBtn       = $('nextBtn');
-const pageLabel     = $('pageLabel');
-const pageDots      = $('pageDots');
-const addPhotoBtn   = $('addPhotoBtn');
-const gdriveBtn     = $('gdriveBtn');
-const musicBtn      = $('musicBtn');
-const musicIcon     = $('musicIcon');
-const toast         = $('toast');
+const $ = id => document.getElementById(id);
+const book = $('book');
+const prevBtn = $('prevBtn');
+const nextBtn = $('nextBtn');
+const pageLabel = $('pageLabel');
+const pageDots = $('pageDots');
+const addPhotoBtn = $('addPhotoBtn');
+const gdriveBtn = $('gdriveBtn');
+
+const toast = $('toast');
 
 /* ================================================================
-   AMBIENT MUSIC  (Web Audio API — no external files needed)
+   AUDIO CONTROLLER
    ================================================================ */
-class MusicBox {
+const bgAudio = $('bgAudio');
+const STORAGE_MUSIC = 'memoriesAlbum_music';
+
+class AudioController {
   constructor() {
-    this.ctx       = null;
-    this.master    = null;
-    this.delay     = null;
-    this.feedback  = null;
-    this.playing   = false;
-    this.noteIdx   = 0;
-    this.nextTime  = 0;
-    this.timer     = null;
-    this.AHEAD     = 0.1;   // schedule this many seconds ahead
-    this.LOOK      = 25;    // ms lookahead interval
-
-    // C major pentatonic (Hz), two octaves
-    this.SCALE = [
-      261.63, 293.66, 329.63, 392.00, 440.00,
-      523.25, 587.33, 659.25, 783.99, 880.00,
-    ];
-    // Gentle, uplifting melody pattern (index into SCALE)
-    this.MELODY = [
-      5,7,8,7,5,3,2,3,5,3,0,2,3,5,7,8,
-      9,8,7,5,3,5,7,5,3,2,3,5,7,8,7,5,
-      5,3,0,2,5,7,9,7,5,7,5,3,2,0,3,5,
-    ];
-    this.BPM = 76;
+    this.playing = false;
+    this.defaultSrc = 'assets/romantic.mp3';
+    // Small delay to ensure bgAudio is in DOM if loaded async
+    setTimeout(() => this.loadSrc(), 0);
   }
-
-  _boot() {
-    if (this.ctx) return;
-    this.ctx = new (window.AudioContext || window.webkitAudioContext)();
-    this.master = this.ctx.createGain();
-    this.master.gain.value = 0.16;
-
-    // Simple tape-delay reverb
-    this.delay    = this.ctx.createDelay(0.7);
-    this.delay.delayTime.value = 0.38;
-    this.feedback = this.ctx.createGain();
-    this.feedback.gain.value = 0.22;
-    const wetGain = this.ctx.createGain();
-    wetGain.gain.value = 0.28;
-
-    this.delay.connect(this.feedback);
-    this.feedback.connect(this.delay);
-    this.delay.connect(wetGain);
-    wetGain.connect(this.ctx.destination);
-    this.master.connect(this.delay);
-    this.master.connect(this.ctx.destination);
+  
+  loadSrc() {
+    if (!bgAudio) return;
+    const customUrl = localStorage.getItem(STORAGE_MUSIC);
+    bgAudio.src = customUrl || this.defaultSrc;
   }
-
-  _note(freq, t) {
-    const dur  = (60 / this.BPM) * 0.78;
-    const osc  = this.ctx.createOscillator();
-    const osc2 = this.ctx.createOscillator();
-    const env  = this.ctx.createGain();
-    const env2 = this.ctx.createGain();
-
-    osc.type  = 'sine';
-    osc2.type = 'triangle';
-    osc.frequency.value  = freq;
-    osc2.frequency.value = freq * 2.005; // slight detune for warmth
-
-    osc.connect(env);
-    osc2.connect(env2);
-    env.connect(this.master);
-    env2.connect(this.master);
-
-    // ADSR — music box / piano feel
-    env.gain.setValueAtTime(0, t);
-    env.gain.linearRampToValueAtTime(0.42, t + 0.012);
-    env.gain.exponentialRampToValueAtTime(0.001, t + dur);
-
-    env2.gain.setValueAtTime(0, t);
-    env2.gain.linearRampToValueAtTime(0.07, t + 0.012);
-    env2.gain.exponentialRampToValueAtTime(0.001, t + dur * 0.45);
-
-    osc.start(t);  osc.stop(t + dur + 0.05);
-    osc2.start(t); osc2.stop(t + dur * 0.45 + 0.05);
-
-    // Occasional soft bass note (every 8 beats)
-    if (this.noteIdx % 8 === 0) {
-      const bass = this.ctx.createOscillator();
-      const benv = this.ctx.createGain();
-      bass.type = 'sine';
-      bass.frequency.value = freq / 2;
-      bass.connect(benv);
-      benv.connect(this.master);
-      benv.gain.setValueAtTime(0, t);
-      benv.gain.linearRampToValueAtTime(0.18, t + 0.02);
-      benv.gain.exponentialRampToValueAtTime(0.001, t + dur * 1.5);
-      bass.start(t);
-      bass.stop(t + dur * 1.5 + 0.05);
+  
+  setSrc(url) {
+    if (url) {
+      localStorage.setItem(STORAGE_MUSIC, url);
+    } else {
+      localStorage.removeItem(STORAGE_MUSIC);
     }
+    this.loadSrc();
+    if (this.playing && bgAudio) bgAudio.play().catch(e => console.log('Audio play failed', e));
   }
-
-  _schedule() {
-    while (this.nextTime < this.ctx.currentTime + this.AHEAD) {
-      const idx  = this.MELODY[this.noteIdx % this.MELODY.length];
-      const freq = this.SCALE[idx % this.SCALE.length];
-      this._note(freq, this.nextTime);
-      this.nextTime += 60 / this.BPM;
-      this.noteIdx++;
-    }
-    this.timer = setTimeout(() => this._schedule(), this.LOOK);
+  
+  getSrc() {
+    return localStorage.getItem(STORAGE_MUSIC) || '';
   }
 
   start() {
-    this._boot();
-    if (this.ctx.state === 'suspended') this.ctx.resume();
-    this.playing   = true;
-    this.nextTime  = this.ctx.currentTime + 0.12;
-    this._schedule();
+    if (!bgAudio) return;
+    this.playing = true;
+    bgAudio.play().catch(e => console.log('Audio autoplay prevented', e));
   }
 
   stop() {
+    if (!bgAudio) return;
     this.playing = false;
-    clearTimeout(this.timer);
-    if (!this.ctx) return;
-    const t = this.ctx.currentTime;
-    this.master.gain.setTargetAtTime(0, t, 0.4);
-    setTimeout(() => {
-      if (!this.playing && this.ctx) {
-        this.ctx.suspend();
-        this.master.gain.value = 0.16;
-      }
-    }, 1800);
+    bgAudio.pause();
   }
 
   toggle() {
     this.playing ? this.stop() : this.start();
     return this.playing;
   }
-
-  /** Soft whoosh for page turn */
-  pageTurnSound() {
-    this._boot();
-    if (this.ctx.state === 'suspended') this.ctx.resume();
-    const ctx    = this.ctx;
-    const sr     = ctx.sampleRate;
-    const len    = Math.floor(sr * 0.28);
-    const buf    = ctx.createBuffer(1, len, sr);
-    const data   = buf.getChannelData(0);
-    for (let i = 0; i < len; i++) {
-      const env  = Math.pow(1 - i / len, 2.5) * Math.sin(Math.PI * i / len * 2);
-      data[i] = (Math.random() * 2 - 1) * env;
-    }
-    const src  = ctx.createBufferSource();
-    src.buffer = buf;
-    const hp   = ctx.createBiquadFilter();
-    hp.type    = 'highpass';
-    hp.frequency.value = 2200;
-    const g    = ctx.createGain();
-    g.gain.value = 0.12;
-    src.connect(hp); hp.connect(g); g.connect(ctx.destination);
-    src.start();
-  }
 }
 
-const music = new MusicBox();
+const music = new AudioController();
 
 /* ================================================================
    PERSISTENCE
    ================================================================ */
 function loadPhotos() {
-  try {
-    const raw = localStorage.getItem(STORAGE_PHOTOS);
-    if (raw) photos = JSON.parse(raw);
-  } catch { photos = []; }
+  photos = [];
+
+  // Load hardcoded photos
+  HARDCODED_PHOTOS.forEach(urlOrId => {
+    const id = gdriveFileId(urlOrId) || urlOrId;
+    if (id) {
+      photos.push({ id: 'hc_' + id, src: driveThumbUrl(id), caption: '', source: 'gdrive' });
+    }
+  });
+
+  // If admin, also load from localStorage for previewing
+  if (isAdmin) {
+    try {
+      const raw = localStorage.getItem(STORAGE_PHOTOS);
+      if (raw) {
+        const localPhotos = JSON.parse(raw);
+        // Avoid duplicates if a photo was added both locally and hardcoded
+        localPhotos.forEach(p => {
+          if (!photos.find(hp => hp.id === p.id || hp.id === 'hc_' + p.id.replace('gd_', ''))) {
+            photos.push(p);
+          }
+        });
+      }
+    } catch (e) { }
+  }
 }
 
 function savePhotos() {
+  if (!isAdmin) return; // Clients don't save
   try {
-    localStorage.setItem(STORAGE_PHOTOS, JSON.stringify(photos));
+    // Only save photos that are NOT hardcoded
+    const photosToSave = photos.filter(p => !p.id.startsWith('hc_'));
+    localStorage.setItem(STORAGE_PHOTOS, JSON.stringify(photosToSave));
   } catch {
     showToast('⚠️ Storage full — some photos may not persist. Consider removing old ones.');
   }
@@ -315,8 +240,8 @@ function renderBook() {
 
   for (let k = 0; k < totalLeaves; k++) {
     const front = pages[2 * k];
-    const back  = pages[2 * k + 1];
-    const leaf  = document.createElement('div');
+    const back = pages[2 * k + 1];
+    const leaf = document.createElement('div');
     leaf.className = 'leaf';
     leaf.dataset.idx = k;
 
@@ -343,9 +268,9 @@ function buildPageEl(page, face, pageIdx, total) {
   if (!page || page.type === 'empty') return emptyPage();
   switch (page.type) {
     case 'cover': return coverFront();
-    case 'back':  return coverBack();
+    case 'back': return coverBack();
     case 'photo': return photoPage(page.photo, face, pageIdx);
-    default:      return emptyPage();
+    default: return emptyPage();
   }
 }
 
@@ -364,11 +289,9 @@ function coverFront() {
       </div>
       <div class="cover-rule"></div>
       <div class="cover-title"
-           contenteditable="true"
-           spellcheck="false"
+           ${isAdmin ? 'contenteditable="true" spellcheck="false" title="Click to edit title"' : ''}
            id="coverTitleEl"
-           aria-label="Album title (click to edit)"
-           title="Click to edit title">${escHtml(getTitle())}</div>
+           aria-label="Album title">${escHtml(getTitle())}</div>
       <div class="cover-subtitle">A Cherished Collection</div>
       <div class="cover-rule"></div>
     </div>
@@ -427,8 +350,10 @@ function photoPage(photo, face, pageIdx) {
              alt="${escHtml(photo.caption || 'Memory')}"
              loading="lazy"
              draggable="false">
+        ${isAdmin ? `
         <button class="photo-delete-btn" data-id="${escHtml(photo.id)}" title="Remove photo">✕</button>
         <button class="photo-caption-btn" data-id="${escHtml(photo.id)}" title="Edit caption">✏</button>
+        ` : ''}
       </div>
     </div>
     <div class="photo-caption">${escHtml(photo.caption || '')}</div>
@@ -446,15 +371,21 @@ function photoPage(photo, face, pageIdx) {
     this.parentNode.insertBefore(ph, this.nextSibling);
   };
 
-  div.querySelector('.photo-delete-btn').addEventListener('click', e => {
-    e.stopPropagation();
-    removePhoto(photo.id);
-  });
+  const deleteBtn = div.querySelector('.photo-delete-btn');
+  if (deleteBtn) {
+    deleteBtn.addEventListener('click', e => {
+      e.stopPropagation();
+      removePhoto(photo.id);
+    });
+  }
 
-  div.querySelector('.photo-caption-btn').addEventListener('click', e => {
-    e.stopPropagation();
-    openCaptionModal(photo.id, photo.caption);
-  });
+  const captionBtn = div.querySelector('.photo-caption-btn');
+  if (captionBtn) {
+    captionBtn.addEventListener('click', e => {
+      e.stopPropagation();
+      openCaptionModal(photo.id, photo.caption);
+    });
+  }
 
   return div;
 }
@@ -493,11 +424,10 @@ function goNext() {
   if (isAnimating || currentLeaf >= totalLeaves) return;
   isAnimating = true;
 
-  const leaves  = book.querySelectorAll('.leaf');
-  const target  = leaves[currentLeaf];
+  const leaves = book.querySelectorAll('.leaf');
+  const target = leaves[currentLeaf];
   if (!target) { isAnimating = false; return; }
 
-  music.pageTurnSound();
   target.style.zIndex = 9999;
   target.classList.add('animating');
 
@@ -524,7 +454,6 @@ function goPrev() {
   const target = leaves[currentLeaf - 1];
   if (!target) { isAnimating = false; return; }
 
-  music.pageTurnSound();
   target.style.zIndex = 9999;
   target.classList.add('animating');
 
@@ -563,7 +492,7 @@ function updateStatus() {
 
   // Dot indicators (cap at 14 dots)
   const total = Math.min(totalLeaves + 1, 14);
-  const pos   = Math.min(currentLeaf, total - 1);
+  const pos = Math.min(currentLeaf, total - 1);
   pageDots.innerHTML = '';
   for (let i = 0; i < total; i++) {
     const d = document.createElement('span');
@@ -581,7 +510,7 @@ document.getElementById('bookScene').addEventListener('click', e => {
   if (e.target.closest('[contenteditable], button, input, textarea, a')) return;
   if (isAnimating) return;
   const rect = book.getBoundingClientRect();
-  const x    = e.clientX - rect.left;
+  const x = e.clientX - rect.left;
   if (x > rect.width / 2) goNext();
   else goPrev();
 });
@@ -589,17 +518,17 @@ document.getElementById('bookScene').addEventListener('click', e => {
 /* ================================================================
    ADD PHOTO MODAL — LOCAL FILES
    ================================================================ */
-const addOverlay  = $('addPhotoOverlay');
-const uploadArea  = $('uploadArea');
-const fileInput   = $('fileInput');
-const previewSec  = $('previewSection');
+const addOverlay = $('addPhotoOverlay');
+const uploadArea = $('uploadArea');
+const fileInput = $('fileInput');
+const previewSec = $('previewSection');
 const previewGrid = $('previewGrid');
-const previewCnt  = $('previewCount');
+const previewCnt = $('previewCount');
 
 function openAddModal() {
   pendingBatch = [];
   previewSec.style.display = 'none';
-  previewGrid.innerHTML    = '';
+  previewGrid.innerHTML = '';
   $('driveLinkInput').value = '';
   addOverlay.classList.add('open');
 }
@@ -610,8 +539,8 @@ function closeAddModal() {
 }
 
 // Drag & drop
-uploadArea.addEventListener('dragover',  e => { e.preventDefault(); uploadArea.classList.add('drag-over'); });
-uploadArea.addEventListener('dragleave', ()  => uploadArea.classList.remove('drag-over'));
+uploadArea.addEventListener('dragover', e => { e.preventDefault(); uploadArea.classList.add('drag-over'); });
+uploadArea.addEventListener('dragleave', () => uploadArea.classList.remove('drag-over'));
 uploadArea.addEventListener('drop', e => {
   e.preventDefault();
   uploadArea.classList.remove('drag-over');
@@ -675,11 +604,11 @@ $('addDriveLinkBtn').addEventListener('click', () => {
   const id = gdriveFileId(url);
   if (!id) { showToast('❌ Could not parse Drive link'); return; }
 
-  const src   = driveThumbUrl(id);
+  const src = driveThumbUrl(id);
   const photo = { id: 'gd_' + id, src, caption: '', source: 'gdrive' };
 
   const img = new Image();
-  img.onload  = () => {
+  img.onload = () => {
     if (!pendingBatch.find(p => p.id === photo.id)) {
       pendingBatch.push(photo);
       addPendingThumb(photo);
@@ -698,11 +627,11 @@ const gdriveOverlay = $('gdriveOverlay');
 
 function openDriveModal() {
   const saved = localStorage.getItem(STORAGE_APIKEY) || '';
-  $('apiKeyInput').value   = saved;
+  $('apiKeyInput').value = saved;
   $('folderUrlInput').value = '';
   $('fetchStatus').textContent = '';
-  $('fetchStatus').className   = 'fetch-status';
-  $('fetchedGrid').style.display  = 'none';
+  $('fetchStatus').className = 'fetch-status';
+  $('fetchedGrid').style.display = 'none';
   $('addFetchedBtn').style.display = 'none';
   fetchedDrive = [];
   $('fetchedGrid').innerHTML = '';
@@ -710,14 +639,14 @@ function openDriveModal() {
 }
 
 $('fetchFolderBtn').addEventListener('click', async () => {
-  const apiKey    = $('apiKeyInput').value.trim();
+  const apiKey = $('apiKeyInput').value.trim();
   const folderUrl = $('folderUrlInput').value.trim();
-  const statusEl  = $('fetchStatus');
-  const gridEl    = $('fetchedGrid');
-  const addBtn    = $('addFetchedBtn');
+  const statusEl = $('fetchStatus');
+  const gridEl = $('fetchedGrid');
+  const addBtn = $('addFetchedBtn');
 
-  if (!apiKey)    { showToast('⚠️ Enter your Google API key'); return; }
-  if (!folderUrl) { showToast('⚠️ Enter a folder URL');       return; }
+  if (!apiKey) { showToast('⚠️ Enter your Google API key'); return; }
+  if (!folderUrl) { showToast('⚠️ Enter a folder URL'); return; }
 
   const m = folderUrl.match(/\/folders\/([a-zA-Z0-9_-]+)/);
   if (!m) { showToast('❌ Could not parse folder URL'); return; }
@@ -726,14 +655,14 @@ $('fetchFolderBtn').addEventListener('click', async () => {
   localStorage.setItem(STORAGE_APIKEY, apiKey);
 
   statusEl.textContent = '⏳ Fetching images…';
-  statusEl.className   = 'fetch-status';
+  statusEl.className = 'fetch-status';
   gridEl.style.display = 'none';
   addBtn.style.display = 'none';
-  gridEl.innerHTML     = '';
-  fetchedDrive         = [];
+  gridEl.innerHTML = '';
+  fetchedDrive = [];
 
   try {
-    const url  = `https://www.googleapis.com/drive/v3/files`
+    const url = `https://www.googleapis.com/drive/v3/files`
       + `?q='${folderId}'+in+parents+and+mimeType+contains+'image/'+and+trashed=false`
       + `&key=${encodeURIComponent(apiKey)}&fields=files(id,name)&pageSize=50`;
     const resp = await fetch(url);
@@ -741,7 +670,7 @@ $('fetchFolderBtn').addEventListener('click', async () => {
 
     if (data.error) {
       statusEl.textContent = `❌ ${data.error.message}`;
-      statusEl.className   = 'fetch-status err';
+      statusEl.className = 'fetch-status err';
       return;
     }
 
@@ -752,15 +681,15 @@ $('fetchFolderBtn').addEventListener('click', async () => {
     }
 
     statusEl.textContent = `✅ Found ${files.length} image${files.length !== 1 ? 's' : ''}`;
-    statusEl.className   = 'fetch-status ok';
+    statusEl.className = 'fetch-status ok';
 
     gridEl.style.display = 'grid';
     files.forEach(file => {
       const photo = {
-        id:      'gd_' + file.id,
-        src:     driveThumbUrl(file.id),
+        id: 'gd_' + file.id,
+        src: driveThumbUrl(file.id),
         caption: file.name.replace(/\.[^.]+$/, '').replace(/[_-]+/g, ' '),
-        source:  'gdrive',
+        source: 'gdrive',
       };
       fetchedDrive.push(photo);
 
@@ -774,7 +703,7 @@ $('fetchFolderBtn').addEventListener('click', async () => {
 
   } catch (err) {
     statusEl.textContent = `❌ ${err.message}`;
-    statusEl.className   = 'fetch-status err';
+    statusEl.className = 'fetch-status err';
   }
 });
 
@@ -794,7 +723,7 @@ $('addBulkLinksBtn').addEventListener('click', () => {
     .map(l => l.trim())
     .filter(Boolean);
 
-  const batch  = [];
+  const batch = [];
   let bad = 0;
   lines.forEach(url => {
     const id = gdriveFileId(url);
@@ -851,6 +780,27 @@ gdriveOverlay.addEventListener('click', e => { if (e.target === gdriveOverlay) g
 $('closeCaption').addEventListener('click', () => { captionOverlay.classList.remove('open'); captionId = null; });
 captionOverlay.addEventListener('click', e => { if (e.target === captionOverlay) { captionOverlay.classList.remove('open'); captionId = null; } });
 
+/* ---- Music Modal ---- */
+const musicOverlay = $('musicOverlay');
+const musicTrackBtn = $('musicTrackBtn');
+if (musicTrackBtn) {
+  musicTrackBtn.addEventListener('click', () => {
+    $('musicUrlInput').value = music.getSrc();
+    musicOverlay.classList.add('open');
+  });
+}
+if ($('closeMusic')) {
+  $('closeMusic').addEventListener('click', () => musicOverlay.classList.remove('open'));
+  musicOverlay.addEventListener('click', e => { if (e.target === musicOverlay) musicOverlay.classList.remove('open'); });
+}
+if ($('saveMusicBtn')) {
+  $('saveMusicBtn').addEventListener('click', () => {
+    music.setSrc($('musicUrlInput').value.trim());
+    musicOverlay.classList.remove('open');
+    showToast('Music track updated!');
+  });
+}
+
 /* ---- Tab switching in Drive modal ---- */
 document.querySelectorAll('.tab').forEach(tab => {
   tab.addEventListener('click', () => {
@@ -861,15 +811,7 @@ document.querySelectorAll('.tab').forEach(tab => {
   });
 });
 
-/* ================================================================
-   MUSIC BUTTON
-   ================================================================ */
-musicBtn.addEventListener('click', () => {
-  const playing = music.toggle();
-  musicBtn.classList.toggle('is-playing', playing);
-  musicIcon.classList.toggle('spin', playing);
-  showToast(playing ? '🎵 Music on' : '🔇 Music off');
-});
+
 
 /* ================================================================
    KEYBOARD NAVIGATION
@@ -878,7 +820,7 @@ document.addEventListener('keydown', e => {
   const active = document.activeElement;
   if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.isContentEditable)) return;
   if (e.key === 'ArrowRight' || e.key === 'PageDown') { e.preventDefault(); goNext(); }
-  if (e.key === 'ArrowLeft'  || e.key === 'PageUp')   { e.preventDefault(); goPrev(); }
+  if (e.key === 'ArrowLeft' || e.key === 'PageUp') { e.preventDefault(); goPrev(); }
 });
 
 /* ================================================================
@@ -905,18 +847,18 @@ nextBtn.addEventListener('click', goNext);
    ================================================================ */
 function initParticles() {
   const container = $('particles');
-  const glyphs    = ['✦', '·', '⭒', '✧', '⋆', '◦', '∘'];
+  const glyphs = ['🌸', '🌺', '🌹', '🥀', '❥', '♥', '❀', '✿'];
   for (let i = 0; i < 18; i++) {
     const p = document.createElement('span');
     p.className = 'particle';
     p.textContent = glyphs[Math.floor(Math.random() * glyphs.length)];
     p.style.cssText = `
       left: ${Math.random() * 100}vw;
-      font-size: ${(Math.random() * 10 + 7)}px;
+      font-size: ${(Math.random() * 14 + 10)}px;
       color: ${Math.random() > 0.5
-        ? 'rgba(201,164,83,0.48)'
-        : 'rgba(30,58,95,0.3)'};
-      animation-duration: ${(Math.random() * 22 + 16)}s;
+        ? 'rgba(183,36,64,0.6)'
+        : 'rgba(212,175,55,0.5)'};
+      animation-duration: ${(Math.random() * 15 + 10)}s;
       animation-delay:    ${(Math.random() * 18)}s;
     `;
     container.appendChild(p);
@@ -942,9 +884,9 @@ function exportAlbum() {
     try {
       const html = generateReadonlyHTML();
       const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
-      const url  = URL.createObjectURL(blob);
-      const a    = document.createElement('a');
-      a.href     = url;
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
       a.download = (getTitle() || 'album').replace(/[^\w\s-]/g, '').trim() + '.html';
       document.body.appendChild(a);
       a.click();
@@ -958,14 +900,14 @@ function exportAlbum() {
 }
 
 function generateReadonlyHTML() {
-  const title      = getTitle();
+  const title = getTitle();
   const photosJson = JSON.stringify(photos.map(p => ({
-    id:      p.id,
-    src:     p.src,
+    id: p.id,
+    src: p.src,
     caption: p.caption || ''
   })));
   const quotesJson = JSON.stringify(BACK_QUOTES);
-  const safeTitle  = title.replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  const safeTitle = title.replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -981,6 +923,7 @@ function generateReadonlyHTML() {
 </head>
 <body>
 <div class="ambient-bg"></div>
+<audio id="bgAudio" src="${escHtml(localStorage.getItem(STORAGE_MUSIC) || 'assets/romantic.mp3')}" loop></audio>
 <div class="particles" id="particles"></div>
 <header class="ro-bar">
   <div class="ro-album-title">${safeTitle}</div>
@@ -1021,7 +964,7 @@ ${readonlyJS()}
 /* ---- Readonly CSS (self-contained, no external files) ---- */
 function readonlyCSS() {
   return `:root{
-  --cover-deep:#162B45;--cover-mid:#1E3A5F;--cover-light:#2A5082;--cover-spine:#0F1E30;
+  --cover-deep:#601323;--cover-mid:#8b1c31;--cover-light:#b72440;--cover-spine:#380a13;
   --gold:#C9A453;--gold-light:#E5C87A;--gold-dim:#9B7833;
   --page-bg:#FFFDF6;--page-line:rgba(180,160,120,0.08);
   --ink-dark:#2A1E10;--ink-mid:#5A4A35;--ink-light:#8A7A60;
@@ -1033,24 +976,24 @@ function readonlyCSS() {
 }
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 html{height:100%}
-body{min-height:100vh;font-family:var(--font-body);display:flex;flex-direction:column;overflow:hidden;user-select:none;-webkit-user-select:none;background:linear-gradient(145deg,#F5E8D0 0%,#EDD9B2 45%,#F0E0C5 100%)}
-.ambient-bg{position:fixed;inset:0;z-index:0;background:radial-gradient(ellipse 60% 50% at 15% 50%,rgba(201,164,83,.13) 0%,transparent 60%),radial-gradient(ellipse 55% 45% at 85% 20%,rgba(30,58,95,.12) 0%,transparent 55%),linear-gradient(145deg,#F5E8D0 0%,#EDD9B2 45%,#F0E0C5 100%);pointer-events:none}
+body{min-height:100vh;font-family:var(--font-body);display:flex;flex-direction:column;overflow:hidden;user-select:none;-webkit-user-select:none;background:linear-gradient(145deg,#FFF3F5 0%,#F5E8D0 45%,#FFEDF0 100%)}
+.ambient-bg{position:fixed;inset:0;z-index:0;background:radial-gradient(ellipse 60% 50% at 15% 50%,rgba(212,175,55,.13) 0%,transparent 60%),radial-gradient(ellipse 55% 45% at 85% 20%,rgba(139,28,49,.15) 0%,transparent 55%),radial-gradient(ellipse 50% 55% at 55% 85%,rgba(183,36,64,.1) 0%,transparent 60%),linear-gradient(145deg,#FFF3F5 0%,#F5E8D0 45%,#FFEDF0 100%);pointer-events:none}
 .particles{position:fixed;inset:0;z-index:0;pointer-events:none;overflow:hidden}
-.particle{position:absolute;bottom:-5vh;opacity:0;animation:floatUp linear infinite}
-@keyframes floatUp{0%{transform:translateY(0) rotate(0deg);opacity:0}8%{opacity:.55}90%{opacity:.35}100%{transform:translateY(-105vh) rotate(540deg);opacity:0}}
+.particle{position:absolute;top:-5vh;opacity:0;animation:floatDown linear infinite;color:var(--cover-light)}
+@keyframes floatDown{0%{transform:translateY(0) rotate(0deg);opacity:0}8%{opacity:.65}90%{opacity:.45}100%{transform:translateY(105vh) rotate(540deg);opacity:0}}
 .ro-bar{position:relative;z-index:200;flex-shrink:0;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 20px;background:rgba(255,255,255,.85);backdrop-filter:blur(20px);border-bottom:1px solid rgba(201,164,83,.25);box-shadow:0 2px 24px rgba(0,0,0,.07)}
 .ro-album-title{font-family:var(--font-script);font-size:20px;color:var(--cover-mid);flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .ro-status{display:flex;flex-direction:column;align-items:center;gap:5px;flex:2}
 .page-label{font-family:var(--font-display);font-size:12px;font-style:italic;color:var(--ink-mid)}
 .page-dots{display:flex;gap:5px;align-items:center}
-.pdot{width:7px;height:7px;border-radius:50%;background:rgba(30,58,95,.18);transition:all .3s}
+.pdot{width:7px;height:7px;border-radius:50%;background:rgba(139,28,49,.18);transition:all .3s}
 .pdot.visited{background:var(--gold)}.pdot.active{background:var(--cover-mid);transform:scale(1.4)}
-.ro-music{background:none;border:1.5px solid rgba(30,58,95,.18);border-radius:50%;width:36px;height:36px;cursor:pointer;font-size:16px;display:flex;align-items:center;justify-content:center;transition:all .22s;flex-shrink:0}
+.ro-music{background:none;border:1.5px solid rgba(139,28,49,.18);border-radius:50%;width:36px;height:36px;cursor:pointer;font-size:16px;display:flex;align-items:center;justify-content:center;transition:all .22s;flex-shrink:0}
 .ro-music:hover{background:var(--cover-mid);border-color:transparent}
 .ro-music.playing{background:linear-gradient(135deg,var(--gold-dim),var(--gold));border-color:transparent}
 .scene{position:relative;z-index:1;flex:1;display:flex;align-items:center;justify-content:center;padding:18px 0;overflow:hidden}
 .nav-arrow{flex-shrink:0;width:50px;height:50px;border:none;border-radius:50%;background:rgba(255,255,255,.82);backdrop-filter:blur(10px);color:var(--cover-mid);cursor:pointer;display:flex;align-items:center;justify-content:center;box-shadow:0 3px 18px rgba(0,0,0,.12);transition:all .25s;margin:0 12px}
-.nav-arrow:hover:not(:disabled){background:var(--cover-mid);color:white;transform:scale(1.1);box-shadow:0 5px 22px rgba(30,58,95,.38)}
+.nav-arrow:hover:not(:disabled){background:var(--cover-mid);color:white;transform:scale(1.1);box-shadow:0 5px 22px rgba(139,28,49,.38)}
 .nav-arrow:disabled{opacity:.28;cursor:not-allowed}
 .book-scene{position:relative;perspective:2800px;perspective-origin:50% 50%}
 .book-drop-shadow{position:absolute;bottom:-22px;left:50%;transform:translateX(-50%);width:calc(var(--page-w)*1.7);height:36px;background:radial-gradient(ellipse at center,rgba(0,0,0,.38) 0%,transparent 72%);filter:blur(10px);z-index:0;pointer-events:none}
@@ -1059,7 +1002,7 @@ body{min-height:100vh;font-family:var(--font-body);display:flex;flex-direction:c
 .book::before{content:'';position:absolute;left:calc(50% - 5px);top:0;width:10px;height:100%;background:linear-gradient(90deg,rgba(0,0,0,.35) 0%,rgba(0,0,0,.12) 35%,rgba(255,255,255,.08) 50%,rgba(0,0,0,.12) 65%,rgba(0,0,0,.35) 100%);z-index:500;pointer-events:none}
 .book::after{content:'';position:absolute;inset:0;box-shadow:-6px 0 18px -4px rgba(0,0,0,.3),6px 0 18px -4px rgba(0,0,0,.22),0 2px 12px -2px rgba(0,0,0,.28);pointer-events:none;z-index:501}
 .endpaper{position:absolute;top:0;width:50%;height:100%;z-index:0}
-.left-endpaper{left:0;background:repeating-linear-gradient(45deg,transparent,transparent 1px,rgba(255,255,255,.025) 1px,rgba(255,255,255,.025) 2px),linear-gradient(160deg,#1E3A5F 0%,#0F1E30 100%)}
+.left-endpaper{left:0;background:repeating-linear-gradient(45deg,transparent,transparent 1px,rgba(255,255,255,.025) 1px,rgba(255,255,255,.025) 2px),linear-gradient(160deg,#601323 0%,#380a13 100%)}
 .right-endpaper{left:50%;background:var(--page-bg);background-image:repeating-linear-gradient(0deg,transparent,transparent 27px,var(--page-line) 28px)}
 .leaf{position:absolute;left:50%;top:0;width:50%;height:100%;transform-origin:left center;transform-style:preserve-3d;transition:transform var(--flip-dur) var(--flip-ease);cursor:pointer}
 .leaf.flipped{transform:rotateY(-180deg)}
@@ -1069,10 +1012,10 @@ body{min-height:100vh;font-family:var(--font-body);display:flex;flex-direction:c
 .leaf-front::after{content:'';position:absolute;right:0;top:0;width:24px;height:100%;background:linear-gradient(270deg,rgba(0,0,0,.10) 0%,transparent 100%);pointer-events:none;z-index:5}
 .leaf-back::after{content:'';position:absolute;left:0;top:0;width:24px;height:100%;background:linear-gradient(90deg,rgba(0,0,0,.10) 0%,transparent 100%);pointer-events:none;z-index:5}
 .cover-page{width:100%;height:100%;position:relative;overflow:hidden}
-.cover-front{background:repeating-linear-gradient(45deg,transparent,transparent 1px,rgba(255,255,255,.025) 1px,rgba(255,255,255,.025) 2px),repeating-linear-gradient(-45deg,transparent,transparent 1px,rgba(0,0,0,.02) 1px,rgba(0,0,0,.02) 2px),linear-gradient(155deg,#1E3A5F 0%,#2A5082 38%,#1B3A4B 68%,#0F1E30 100%)}
+.cover-front{background:repeating-linear-gradient(45deg,transparent,transparent 1px,rgba(255,255,255,.025) 1px,rgba(255,255,255,.025) 2px),repeating-linear-gradient(-45deg,transparent,transparent 1px,rgba(0,0,0,.02) 1px,rgba(0,0,0,.02) 2px),linear-gradient(155deg,#8b1c31 0%,#b72440 38%,#601323 68%,#380a13 100%)}
 .cover-front::before{content:'';position:absolute;inset:9px;border:2px solid rgba(201,164,83,.72);pointer-events:none}
 .cover-front::after{content:'';position:absolute;inset:14px;border:1px solid rgba(201,164,83,.28);pointer-events:none}
-.cover-back{background:repeating-linear-gradient(45deg,transparent,transparent 1px,rgba(255,255,255,.02) 1px,rgba(255,255,255,.02) 2px),linear-gradient(155deg,#0F1E30 0%,#1B3A4B 50%,#0F1E30 100%)}
+.cover-back{background:repeating-linear-gradient(45deg,transparent,transparent 1px,rgba(255,255,255,.02) 1px,rgba(255,255,255,.02) 2px),linear-gradient(155deg,#380a13 0%,#601323 50%,#380a13 100%)}
 .cover-back::before{content:'';position:absolute;inset:9px;border:2px solid rgba(201,164,83,.5);pointer-events:none}
 .cover-back::after{content:'';position:absolute;inset:14px;border:1px solid rgba(201,164,83,.2);pointer-events:none}
 .cv-corner{position:absolute;width:36px;height:36px;border:2px solid var(--gold);opacity:.72}
@@ -1118,17 +1061,13 @@ body{min-height:100vh;font-family:var(--font-body);display:flex;flex-direction:c
 function readonlyJS() {
   return `
 // === MUSIC ENGINE ===
-class MusicBox{
-  constructor(){this.ctx=null;this.master=null;this.delay=null;this.feedback=null;this.playing=false;this.noteIdx=0;this.nextTime=0;this.timer=null;this.AHEAD=0.1;this.LOOK=25;this.SCALE=[261.63,293.66,329.63,392,440,523.25,587.33,659.25,783.99,880];this.MELODY=[5,7,8,7,5,3,2,3,5,3,0,2,3,5,7,8,9,8,7,5,3,5,7,5,3,2,3,5,7,8,7,5,5,3,0,2,5,7,9,7,5,7,5,3,2,0,3,5];this.BPM=76;}
-  _boot(){if(this.ctx)return;this.ctx=new(window.AudioContext||window.webkitAudioContext)();this.master=this.ctx.createGain();this.master.gain.value=0.16;this.delay=this.ctx.createDelay(0.7);this.delay.delayTime.value=0.38;this.feedback=this.ctx.createGain();this.feedback.gain.value=0.22;var w=this.ctx.createGain();w.gain.value=0.28;this.delay.connect(this.feedback);this.feedback.connect(this.delay);this.delay.connect(w);w.connect(this.ctx.destination);this.master.connect(this.delay);this.master.connect(this.ctx.destination);}
-  _note(freq,t){var dur=(60/this.BPM)*0.78,osc=this.ctx.createOscillator(),osc2=this.ctx.createOscillator(),env=this.ctx.createGain(),env2=this.ctx.createGain();osc.type='sine';osc2.type='triangle';osc.frequency.value=freq;osc2.frequency.value=freq*2.005;osc.connect(env);osc2.connect(env2);env.connect(this.master);env2.connect(this.master);env.gain.setValueAtTime(0,t);env.gain.linearRampToValueAtTime(0.42,t+0.012);env.gain.exponentialRampToValueAtTime(0.001,t+dur);env2.gain.setValueAtTime(0,t);env2.gain.linearRampToValueAtTime(0.07,t+0.012);env2.gain.exponentialRampToValueAtTime(0.001,t+dur*0.45);osc.start(t);osc.stop(t+dur+0.05);osc2.start(t);osc2.stop(t+dur*0.45+0.05);if(this.noteIdx%8===0){var b=this.ctx.createOscillator(),bg=this.ctx.createGain();b.type='sine';b.frequency.value=freq/2;b.connect(bg);bg.connect(this.master);bg.gain.setValueAtTime(0,t);bg.gain.linearRampToValueAtTime(0.18,t+0.02);bg.gain.exponentialRampToValueAtTime(0.001,t+dur*1.5);b.start(t);b.stop(t+dur*1.5+0.05);}}
-  _schedule(){while(this.nextTime<this.ctx.currentTime+this.AHEAD){var idx=this.MELODY[this.noteIdx%this.MELODY.length],freq=this.SCALE[idx%this.SCALE.length];this._note(freq,this.nextTime);this.nextTime+=60/this.BPM;this.noteIdx++;}this.timer=setTimeout(function(){music._schedule();},this.LOOK);}
-  start(){this._boot();if(this.ctx.state==='suspended')this.ctx.resume();this.playing=true;this.nextTime=this.ctx.currentTime+0.12;this._schedule();}
-  stop(){this.playing=false;clearTimeout(this.timer);if(!this.ctx)return;this.master.gain.setTargetAtTime(0,this.ctx.currentTime,0.4);var self=this;setTimeout(function(){if(!self.playing&&self.ctx){self.ctx.suspend();self.master.gain.value=0.16;}},1800);}
+class AudioController{
+  constructor(){this.playing=false;var bg=document.getElementById('bgAudio');this.bg=bg;}
+  start(){if(this.bg){this.playing=true;this.bg.play().catch(function(e){console.log('Audio autoplay prevented',e)});}}
+  stop(){if(this.bg){this.playing=false;this.bg.pause();}}
   toggle(){this.playing?this.stop():this.start();return this.playing;}
-  pageTurnSound(){this._boot();if(this.ctx.state==='suspended')this.ctx.resume();var ctx=this.ctx,sr=ctx.sampleRate,len=Math.floor(sr*0.28),buf=ctx.createBuffer(1,len,sr),data=buf.getChannelData(0);for(var i=0;i<len;i++){var e=Math.pow(1-i/len,2.5)*Math.sin(Math.PI*i/len*2);data[i]=(Math.random()*2-1)*e;}var src=ctx.createBufferSource();src.buffer=buf;var hp=ctx.createBiquadFilter();hp.type='highpass';hp.frequency.value=2200;var g=ctx.createGain();g.gain.value=0.12;src.connect(hp);hp.connect(g);g.connect(ctx.destination);src.start();}
 }
-var music=new MusicBox();
+var music=new AudioController();
 
 // === STATE ===
 var currentLeaf=0,totalLeaves=0,isAnimating=false;
@@ -1238,7 +1177,7 @@ function goNext(){
   isAnimating=true;
   var leaves=book.querySelectorAll('.leaf'),t=leaves[currentLeaf];
   if(!t){isAnimating=false;return;}
-  music.pageTurnSound();
+  
   t.style.zIndex=9999;t.classList.add('animating');
   requestAnimationFrame(function(){t.classList.add('flipped');});
   setTimeout(function(){currentLeaf++;t.classList.remove('animating');applyFlip();updateNav();updateStatus();isAnimating=false;},900);
@@ -1249,7 +1188,7 @@ function goPrev(){
   isAnimating=true;
   var leaves=book.querySelectorAll('.leaf'),t=leaves[currentLeaf-1];
   if(!t){isAnimating=false;return;}
-  music.pageTurnSound();
+  
   t.style.zIndex=9999;t.classList.add('animating');
   requestAnimationFrame(function(){t.classList.remove('flipped');});
   setTimeout(function(){currentLeaf--;t.classList.remove('animating');applyFlip();updateNav();updateStatus();isAnimating=false;},900);
@@ -1296,11 +1235,11 @@ musicBtn.addEventListener('click',function(){
 
 // === PARTICLES ===
 function initParticles(){
-  var c=document.getElementById('particles'),g=['\u2726','\u00b7','\u2bd2','\u2727','\u22c6','\u25e6'];
+  var c=document.getElementById('particles'),g=['🌸','🌺','🌹','🥀','❥','♥','❀','✿'];
   for(var i=0;i<18;i++){
     var p=document.createElement('span');p.className='particle';
     p.textContent=g[Math.floor(Math.random()*g.length)];
-    p.style.cssText='left:'+Math.random()*100+'vw;font-size:'+(Math.random()*10+7)+'px;color:'+(Math.random()>.5?'rgba(201,164,83,.48)':'rgba(30,58,95,.3)')+';animation-duration:'+(Math.random()*22+16)+'s;animation-delay:'+(Math.random()*18)+'s;';
+    p.style.cssText='left:'+Math.random()*100+'vw;font-size:'+(Math.random()*14+10)+'px;color:'+(Math.random()>.5?'rgba(183,36,64,.6)':'rgba(212,175,55,.5)')+';animation-duration:'+(Math.random()*15+10)+'s;animation-delay:'+(Math.random()*18)+'s;';
     c.appendChild(p);
   }
 }
@@ -1338,12 +1277,32 @@ function escHtml(str) {
    INIT
    ================================================================ */
 function init() {
+  if (isAdmin) {
+    document.body.classList.add('admin-mode');
+  }
   loadPhotos();
   renderBook();
   initParticles();
-  if (photos.length === 0) {
+  if (isAdmin && photos.length === 0) {
     setTimeout(() => showToast('📷 Welcome! Click "Add Photo" to start your album'), 1000);
   }
+
+  // Setup interaction to start music automatically
+  const startMusic = () => {
+    if (!music.playing) {
+      music.start();
+      const mi = document.getElementById('musicIndicator');
+      if (mi) mi.classList.add('playing');
+    }
+    // Remove listeners after first interaction
+    document.removeEventListener('click', startMusic);
+    document.removeEventListener('keydown', startMusic);
+    document.removeEventListener('touchstart', startMusic);
+  };
+
+  document.addEventListener('click', startMusic);
+  document.addEventListener('keydown', startMusic);
+  document.addEventListener('touchstart', startMusic);
 }
 
 init();

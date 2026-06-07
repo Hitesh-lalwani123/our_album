@@ -13,17 +13,19 @@
 <body>
 
   <!-- Ambient Background -->
+  <audio id="bgAudio" loop></audio>
   <div class="ambient-bg"></div>
   <div class="particles" id="particles"></div>
 
   <!-- ====== TOOLBAR ====== -->
   <header class="toolbar" id="toolbar">
     <div class="toolbar-group toolbar-left">
-      <button class="tool-btn primary-tool" id="addPhotoBtn" title="Add photos to album">
+      <!-- Admin-only controls (hidden for clients via CSS unless body.admin-mode) -->
+      <button class="tool-btn primary-tool admin-only" id="addPhotoBtn" title="Add photos to album">
         <span class="btn-icon">📷</span>
         <span class="btn-label">Add Photo</span>
       </button>
-      <button class="tool-btn" id="gdriveBtn" title="Import from Google Drive">
+      <button class="tool-btn admin-only" id="gdriveBtn" title="Import from Google Drive">
         <span class="btn-icon">
           <svg width="17" height="17" viewBox="0 0 87.3 78" xmlns="http://www.w3.org/2000/svg">
             <path d="m6.6 66.85 3.85 6.65c.8 1.4 1.95 2.5 3.3 3.3l13.75-23.8h-27.5c0 1.55.4 3.1 1.2 4.5z" fill="#0066da"/>
@@ -36,6 +38,10 @@
         </span>
         <span class="btn-label">Drive</span>
       </button>
+      <button class="tool-btn admin-only" id="musicTrackBtn" title="Change Background Music">
+        <span class="btn-icon">🎵</span>
+        <span class="btn-label">Music</span>
+      </button>
     </div>
 
     <div class="toolbar-group toolbar-center">
@@ -46,14 +52,14 @@
     </div>
 
     <div class="toolbar-group toolbar-right">
-      <button class="tool-btn" id="exportBtn" title="Export as shareable read-only album">
+      <button class="tool-btn admin-only" id="exportBtn" title="Export as shareable read-only album">
         <span class="btn-icon">📤</span>
         <span class="btn-label">Share</span>
       </button>
-      <button class="tool-btn music-btn" id="musicBtn" title="Toggle background music">
-        <span class="music-icon" id="musicIcon">🎵</span>
-        <span class="btn-label">Music</span>
-      </button>
+      <!-- Music indicator (no toggle — music always plays) -->
+      <div class="music-indicator" id="musicIndicator" title="Background music is playing">
+        <span class="music-note-anim">🎵</span>
+      </div>
     </div>
   </header>
 
@@ -86,7 +92,7 @@
   </main>
 
   <!-- ============================================
-       MODAL: Add Photo
+       MODAL: Add Photo (admin-only)
        ============================================ -->
   <div class="modal-overlay" id="addPhotoOverlay">
     <div class="modal" id="addPhotoModal">
@@ -132,7 +138,7 @@
   </div>
 
   <!-- ============================================
-       MODAL: Google Drive Folder Import
+       MODAL: Google Drive Folder Import (admin-only)
        ============================================ -->
   <div class="modal-overlay" id="gdriveOverlay">
     <div class="modal" id="gdriveModal">
@@ -186,7 +192,7 @@
   </div>
 
   <!-- ============================================
-       MODAL: Edit Caption
+       MODAL: Edit Caption (admin-only)
        ============================================ -->
   <div class="modal-overlay" id="captionOverlay">
     <div class="modal modal-sm" id="captionModal">
@@ -198,6 +204,26 @@
         <label for="captionInput">Caption (optional):</label>
         <input type="text" id="captionInput" class="text-input" placeholder="Add a memory caption..." maxlength="120">
         <button class="confirm-btn" id="saveCaptionBtn" type="button">Save Caption</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================================
+       MODAL: Music URL (admin-only)
+       ============================================ -->
+  <div class="modal-overlay" id="musicOverlay">
+    <div class="modal modal-sm" id="musicModal">
+      <div class="modal-header">
+        <h2 class="modal-title">Background Music</h2>
+        <button class="modal-close" id="closeMusic" aria-label="Close">✕</button>
+      </div>
+      <div class="modal-body">
+        <label for="musicUrlInput">Music URL (leave blank for default):</label>
+        <input type="text" id="musicUrlInput" class="text-input" placeholder="assets/romantic.mp3">
+        <div style="margin-top: 10px; font-size: 0.9em; color: #666; line-height: 1.4;">
+          <strong>Tip:</strong> For local tracks, create an <code>assets</code> folder here, save your audio as <code>romantic.mp3</code>, and the default path will just work!
+        </div>
+        <button class="confirm-btn" id="saveMusicBtn" type="button" style="margin-top: 15px;">Save Music</button>
       </div>
     </div>
   </div>
