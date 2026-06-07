@@ -15,7 +15,17 @@ const HARDCODED_PHOTOS = [
   // Add your Google Drive file IDs or full share links here!
   // e.g. '1BxiMVs0X...', or 'https://drive.google.com/file/d/1BxiMVs0X.../view'
   'https://drive.google.com/file/d/1XJeCzn_W9Tg4P4xp772vmUL2dOOXwFSA/view?usp=drive_link',
-  'https://drive.google.com/file/d/1ig4OJvlQRxo05aXvjIVpyUVPnvIhjb6k/view?usp=drive_link'
+  'https://drive.google.com/file/d/1ig4OJvlQRxo05aXvjIVpyUVPnvIhjb6k/view?usp=drive_link',
+  'https://drive.google.com/file/d/1Yh35rABjlGi_cjjrc5atA-hVHPZ5DsYP/view?usp=drive_link',
+  'https://drive.google.com/file/d/1HwKMYMjLSNNXuLUdpmNddE9oFWktVuvQ/view?usp=drive_link',
+  'https://drive.google.com/file/d/1UQHIVWPdqqS2z7UHrZTXS-kGBz0WQavY/view?usp=drive_link',
+  'https://drive.google.com/file/d/17pfYGPvoRU768GGCgfxJQDk5ORboRn8C/view?usp=drive_link',
+  'https://drive.google.com/file/d/1ig4OJvlQRxo05aXvjIVpyUVPnvIhjb6k/view?usp=drive_link',
+  'https://drive.google.com/file/d/10hQ3H9LCjXogGEb2K6E-66M_5jPqeOYe/view?usp=drive_link',
+  'https://drive.google.com/file/d/1NWhPcL10FbT7CHUmZVfakyX9o-srKwlM/view?usp=drive_link',
+  'https://drive.google.com/file/d/1ah3rh0KSvCMHwiEahODiG9221osyJKet/view?usp=drive_link',
+  'https://drive.google.com/file/d/1H6BhmmlTauiR5Ob8uf5kUF9b4O0w_G87/view?usp=drive_link',
+  'https://drive.google.com/file/d/1LrQyKvAE31ojYmVYj7FDmygDmgs1JEOb/view?usp=drive_link'
 ];
 
 
@@ -67,13 +77,13 @@ class AudioController {
     // Small delay to ensure bgAudio is in DOM if loaded async
     setTimeout(() => this.loadSrc(), 0);
   }
-  
+
   loadSrc() {
     if (!bgAudio) return;
     const customUrl = localStorage.getItem(STORAGE_MUSIC);
     bgAudio.src = customUrl || this.defaultSrc;
   }
-  
+
   setSrc(url) {
     if (url) {
       localStorage.setItem(STORAGE_MUSIC, url);
@@ -83,7 +93,7 @@ class AudioController {
     this.loadSrc();
     if (this.playing && bgAudio) bgAudio.play().catch(e => console.log('Audio play failed', e));
   }
-  
+
   getSrc() {
     return localStorage.getItem(STORAGE_MUSIC) || '';
   }
